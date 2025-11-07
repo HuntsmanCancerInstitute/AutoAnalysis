@@ -34,6 +34,21 @@ public class GNomExRequest {
 	
 	private String errorMessages = null;
 
+	
+	/*
+	 request.number	//0
+	request.createDate	//1
+	appuser.email	//2
+	lab.lastname	//3
+	lab.firstname	//4
+	organism.organism	//5
+	application.application	//6
+	request.analysisInstructions	//7   NA or freeform txt
+	request.alignToGenomeBuild	//8  NA, N, or Y
+	request.bioInformaticsAssist	//9  N or Y
+	request.codeRequestStatus	//10
+	request.lastModifyDate	//11
+	 * */
 	public GNomExRequest (String[] fields) {
 		dbResults = fields;
 		//watch out for requests with numbers trailing the R, e.g. 22564R1 -> converted to just 22564R which is the dir name in the repo
@@ -66,7 +81,8 @@ public class GNomExRequest {
 		sb.append(originalRequestId); sb.append("\t");
 		sb.append(creationDate); sb.append("\t");
 		sb.append(organism); sb.append("\t");
-		sb.append(libraryPreparation);
+		sb.append(libraryPreparation); sb.append("\t");
+		sb.append(autoAnalyze);
 		return sb.toString();
 	}
 	
@@ -119,7 +135,6 @@ public class GNomExRequest {
 					continue;
 				}
 				
-				
 				Util.createSymbolicLinks(toLink, subDir);
 				String sampleNames= Util.stringHashToString(sampleRepeats, ",");
 				
@@ -145,12 +160,13 @@ public class GNomExRequest {
 		return false;
 	}
 	
-	/**Returns false if all samples don't have just  _R1_ and _R2_ s named fastq, otherwise probably a UMI is present.
-	 * Multiple R1s and R2s will be merged.*/
+	/**Returns false if all samples don't have just  _R1_ and _R2_ s named fastq or single ora, otherwise probably a UMI is present.*/
 	public boolean checkR1R2FastqsPerSample() {
 
 			//21369X1_20231010_LH00227_0016_B227FWCLT3_S15_L001_R1_001.fastq.gz
 			//21369X1_20231010_LH00227_0016_B227FWCLT3_S15_L001_R2_001.fastq.gz
+			//or
+			//21369X1_20231010_LH00227_0016_B227FWCLT3_S15_L002_R-interleaved_001.fastq.ora
 			HashMap<String, ArrayList<String>> sampleFastqs = new HashMap<String, ArrayList<String>>();
 			String fileName = null;
 			for (File f: fastqFiles) {
@@ -163,24 +179,32 @@ public class GNomExRequest {
 				}
 				fileNames.add(fileName);
 			}
-			//check that each sample has the same number of _R1_ and _R2_ s and nothing else
+			//check that each sample has the same number of _R1_ and _R2_, ora, and nothing else
 			for (ArrayList<String> al: sampleFastqs.values()) {
 				int r1 = 0;
 				int r2 = 0;
+				int ora = 0;
 				int rOther = 0;
 				//if (al.size()!=2) return false;
 				for (String s: al) {
 					if (s.contains("_R1_")) r1++;
 					else if (s.contains("_R2_")) r2++;
+					else if (s.contains("_R-interleaved_")) ora++;
 					else rOther++;
 				}
+				//mixed num fastq or non fastq
 				if (r1!=r2 || rOther!=0) return false;
+				//mixed fastq and ora, OK for 10x but not standard bulk RnaSeq or DnaSeq
+				if (r1>0 && ora>1) return false;
+				//no fastq or ora
+				if (r1==0 && ora ==0) return false;
 			}
 			return true;
 	}
 	
 	public int countNumberFastqSamples() {
 		//21369X1_20231010_LH00227_0016_B227FWCLT3_S15_L001_R1_001.fastq.gz
+		//26155X1_20250425_LH00227_0152_A22Y7LTLT3_S17_L002_R-interleaved_001.fastq.ora
 		HashSet<String> sampleFastqs = new HashSet<String>();
 		String fileName = null;
 		for (File f: fastqFiles) {
@@ -191,10 +215,12 @@ public class GNomExRequest {
 		return sampleFastqs.size();
 	}
 	
-	/**Returns false if all of the fastqs don't have at least the minimumFastqCount.
+	/**Returns false if all of the fastqs don't have at least the minimumFastqCount. Skip ora
 	 * @throws IOException */
 	public boolean checkFastqsHaveSufficientReads(ArrayList<File> fastqFiles) throws IOException {
 		for (File f: fastqFiles) {
+			//skip ora
+			if (f.getName().endsWith(".ora")) continue;
 			int lineCount = 0;
 			String line = null;
 			BufferedReader in = Util.fetchBufferedReader(f);
@@ -237,7 +263,8 @@ public class GNomExRequest {
 	
 	public boolean checkFastq() {
 
-		File fastqDirectory = new File(requestDirectory, "Fastq");
+		File fastqDirectory = new File(requestDirectory, "Fastq");	
+
 		if (fastqDirectory.exists() == false) return false;
 
 		//contains a file with md5 in the name
@@ -248,22 +275,24 @@ public class GNomExRequest {
 				foundMd5 = true;
 				break;
 			}
-		}
+		}	
 		if (foundMd5 == false) return false;
 
-		//find the fastq files and check they are all at least 1 hour old, want to avoid jobs in transfer from demuxing
-		fastqFiles = Util.fetchFilesRecursively(fastqDirectory, "q.gz");
+		//find the fastq files (gz or ora) 
+		File[][] seqFiles = new File[2][];
+		seqFiles[0] = Util.extractFiles(fastqDirectory, "q.gz");
+		seqFiles[1] = Util.extractFiles(fastqDirectory,".ora");
+		fastqFiles = Util.collapseFileArray(seqFiles);
 		
 		//any fastqs? might be deleted
 		if (fastqFiles.length == 0) return false;
 		
 		//check age, don't want to work on very recent fastqs since these might be in process of being copied over from demux
-		long currentTime = System.currentTimeMillis() - 3600000;
+		long currentTime = System.currentTimeMillis() - 3600000;  //1hr
 		for (File f: fastqFiles) if ((currentTime - f.lastModified())<0) return false;
 		
 		//count fastq sample names
 		numberFastqSampleNames = countNumberFastqSamples();
-		
 		return true;
 	}
 	
@@ -399,5 +428,9 @@ public class GNomExRequest {
 
 	public int getNumberFastqSampleNames() {
 		return numberFastqSampleNames;
+	}
+
+	public File[] getFastqFiles() {
+		return fastqFiles;
 	}
 }

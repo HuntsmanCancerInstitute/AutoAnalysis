@@ -1,5 +1,5 @@
 # Key TAB Value configuration file for the GNomEx and Chpc AutoAnalysis daemons
-# Last Edit 26 Dec 2024 - david.nix@hci.utah.edu
+# Last Edit 4 April 2025 - david.nix@hci.utah.edu
 
 ########## GNomExAutoAnalysis Specific ###########
 
@@ -70,7 +70,7 @@ hoursToWait	6
 ########## ChpcAutoAnalysis Specific ###########
 
 # HCI userName@serverIP for executing cmds from CHPC to HCI for ssh and 
-hciUserNameIp	tomatosrvs@hci-deadhorse.hci.utah.edu
+hciUserNameIp	tomatosrvs@hci-dragen.hci.utah.edu
 
 # CHPC job directory, the ChpcAutoAnalysis daemon on CHPC will be executing slurm jobs in this directory  
 	# Analysis jobs with a RUNME file to copied over

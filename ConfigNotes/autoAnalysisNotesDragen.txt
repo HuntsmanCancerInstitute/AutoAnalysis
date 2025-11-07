@@ -22,7 +22,7 @@ rsync -rPtL ~/Code/AutoAnalysis/target/AutoAnalysis-0.1-jar-with-dependencies.ja
 # On dragen as tomatosrvs in /home/tomatosrvs/AutoAnalysis/
 ssh hci-dragen; sudo su tomatosrvs; cd ~/AutoAnalysis/
 top # kill any running AutoAnalysis
-cp /home/u0028003/ForAutoAnalysisDelme/* .
+rsync -rPtL /home/u0028003/ForAutoAnalysisDelme/* .
 nohup java -jar -Xmx1G AutoAnalysis-0.1-jar-with-dependencies.jar -l HCI -c autoAnalysis.config.txt \
   -p gnomExDbJiraApi.cred.txt &> daemon.log &
 tail -f daemon.log 

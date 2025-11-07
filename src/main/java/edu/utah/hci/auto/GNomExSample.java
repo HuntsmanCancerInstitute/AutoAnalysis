@@ -6,6 +6,7 @@ public class GNomExSample {
 	private String requestId;
 	private String sampleId;
 	private String species;
+	private String requestLastModifiedDate;
 	private String requestCreationDate;
 	private String oraSpecies;
 	private boolean oraCompress = true;
@@ -15,7 +16,8 @@ public class GNomExSample {
 		sampleId = results[1];
 		species = results[2];
 		requestCreationDate = results[3];
-		if (results[4].equals("N")) oraCompress = false;
+		requestLastModifiedDate = results[4];
+		if (results[5].equals("N")) oraCompress = false;
 	}
 	
 	public String toString() {

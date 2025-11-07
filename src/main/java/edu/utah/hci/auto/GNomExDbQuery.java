@@ -60,14 +60,16 @@ public class GNomExDbQuery {
 }
 	private void runSpeciesQuery(Driver d, Connection con) throws Exception{
 		
-		String SQL = "SELECT DISTINCT request.number, sample.number, organism.organism, request.createDate, request.oraCompression "+
+		String SQL = "SELECT DISTINCT request.number, sample.number, organism.organism, request.createDate, request.lastModifyDate, request.oraCompression "+
 		"FROM request "+
 		"join project on project.idproject = request.idproject "+
 		"join sample on sample.idrequest = request.idrequest "+
 		"join organism on sample.idorganism = organism.idorganism "+
-		"WHERE request.createDate > (select dateadd(month, -12, getdate())) ORDER BY request.createDate;";
-		
-		int numReturnValues = 5;
+		"WHERE (request.lastModifyDate > (select dateadd(month, -12, getdate()))) "+
+		"OR (request.createDate > (select dateadd(month, -12, getdate()))) "+
+		"ORDER BY request.lastModifyDate;";
+
+		int numReturnValues = 6;
 		
 		stmt = con.createStatement();
 		rs = stmt.executeQuery(SQL);
@@ -81,20 +83,80 @@ public class GNomExDbQuery {
 				if (val != null) results[resultsIndex++] = val.trim();
 				else results[resultsIndex++] = "NA";
 			}
-			requestsAl.add(new GNomExSample(results));
-			//Util.pl(Util.stringArrayToString(results, "\t"));
+			GNomExSample gs = new GNomExSample(results);
+			requestsAl.add(gs);
+//Util.pl(gs.toString());
+//Util.pl(Util.stringArrayToString(results, "\t"));
 		}
-		
+//Util.pl(requestsAl.size()+"\tNumSpeciesRes");
+
 		samples = new GNomExSample[requestsAl.size()];
 		requestsAl.toArray(samples);
 		
 	}
-
-
+	
 	private void runAutoAnalysisQuery(Driver d, Connection con) throws Exception{
 		String SQL = "SELECT DISTINCT "+
 				"request.number,  "+				//0
 				"request.createDate,  "+			//1
+				"appuser.email, "+					//2
+				"lab.lastname,  "+					//3
+				"lab.firstname,  "+					//4
+				"organism.organism, "+				//5
+				"application.application, "+		//6
+				"request.analysisInstructions, "+	//7   NA or freeform txt
+				"request.alignToGenomeBuild, "+     //8  NA, N, or Y
+				"request.bioInformaticsAssist, "+   //9  N or Y
+				"request.codeRequestStatus, "+      //10
+				"request.lastModifyDate "+			//11
+				"FROM request  "+
+				"join project on project.idproject = request.idproject  "+
+				"join lab on lab.idlab = request.idlab  "+
+				"join sample on sample.idrequest = request.idrequest "+
+				"join organism on sample.idorganism = organism.idorganism "+
+				"join appuser on appuser.idappuser = request.idappuser  "+
+				"join application on application.codeapplication = request.codeapplication "+
+				"WHERE (request.lastModifyDate > (select dateadd(month, -12, getdate())) "+
+				"OR request.createDate > (select dateadd(month, -12, getdate()))) "+
+				"AND (request.bioInformaticsAssist = 'Y' OR request.alignToGenomeBuild = 'Y') "+
+				"ORDER BY request.lastModifyDate; ";
+		
+		
+//new
+// "WHERE (request.lastModifyDate > (select dateadd(month, -12, getdate())) "+
+// "OR request.createDate > (select dateadd(month, -12, getdate()))) "+
+		
+//old
+//	"WHERE request.createDate > (select dateadd(month, -12, getdate())) "+
+//	"AND (request.bioInformaticsAssist = 'Y' OR request.alignToGenomeBuild = 'Y') "+
+		
+		int numReturnValues = 12; 
+		
+		stmt = con.createStatement();
+		rs = stmt.executeQuery(SQL);
+		if (verbose) Util.pl("Loading results...");
+		ArrayList<String[]> requestsAl = new ArrayList<String[]>();
+		while (rs.next()) {
+			String[] results = new String[numReturnValues];
+			int resultsIndex = 0;
+			for (int i=1; i<numReturnValues+1; i++) {
+				String val = rs.getString(i);
+				if (val != null) results[resultsIndex++] = val.trim();
+				else results[resultsIndex++] = "NA";
+			}
+			requestsAl.add(results);
+//Util.pl(Util.stringArrayToString(results, "\n")+"\n");
+		}
+//Util.pl("NumMainAAReq: "+requestsAl.size());
+		parseRequests(requestsAl);
+		
+	}
+
+	//not used, delete
+	private void runAutoAnalysisQueryOld(Driver d, Connection con) throws Exception{
+		String SQL = "SELECT DISTINCT "+
+				"request.number,  "+				//0
+				"request.lastModifyDate,  "+			//1
 				"appuser.email, "+					//2
 				"lab.lastname,  "+					//3
 				"lab.firstname,  "+					//4
@@ -111,9 +173,9 @@ public class GNomExDbQuery {
 				"join organism on sample.idorganism = organism.idorganism "+
 				"join appuser on appuser.idappuser = request.idappuser  "+
 				"join application on application.codeapplication = request.codeapplication "+
-				"WHERE request.createDate > (select dateadd(month, -12, getdate())) "+
+				"WHERE request.lastModifyDate > (select dateadd(month, -12, getdate())) "+
 				"AND (request.bioInformaticsAssist = 'Y' OR request.alignToGenomeBuild = 'Y') "+
-				"ORDER BY request.createDate; ";
+				"ORDER BY request.lastModifyDate; ";
 		//"AND request.codeRequestStatus = 'COMPLETE' "+
 		
 		int numReturnValues = 11;
@@ -133,14 +195,14 @@ public class GNomExDbQuery {
 			requestsAl.add(results);
 			//Util.pl(Util.stringArrayToString(results, "\n")+"\n");
 		}
-		
+
 		parseRequests(requestsAl);
 		
 	}
 
 	public static void main (String[] args) {
 		//replace xxxxx pwd from https://ri-confluence.hci.utah.edu/pages/viewpage.action?pageId=38076459
-		String connectionUrl = "jdbc:sqlserver://hci-db.hci.utah.edu:1433;databaseName=gnomex;user=pipeline;password=xxxxx;encrypt=true;trustServerCertificate=true";
+		String connectionUrl = "jdbc:sqlserver://hci-db.hci.utah.edu:1433;databaseName=gnomex;user=pipeline;password=XXXXX;encrypt=true;trustServerCertificate=true";
 		new GNomExDbQuery(connectionUrl, true);
 	}
 

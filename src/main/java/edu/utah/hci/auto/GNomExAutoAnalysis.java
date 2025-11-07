@@ -139,7 +139,7 @@ public class GNomExAutoAnalysis {
 		//write out new tmp sample file
 		File tmpSamples = new File(sampleSpeciesFile.getParent(), "tmp_"+sampleSpeciesFile.getName());
 		PrintWriter out = new PrintWriter( new FileWriter(tmpSamples));
-		out.println("#ExperimentID\tSampleID\tSpecies\tOraCompress\tOraCompressionSpecies\tCreationDate");
+		out.println("#ExperimentID\tSampleID\tSpecies\tOraCompress\tOraCompressionSpecies\tLastModifiedDate");
 		for (GNomExSample s: samples) out.println(s.toString());
 		out.close();
 		//copy it to the real location
@@ -252,7 +252,12 @@ public class GNomExAutoAnalysis {
 			
 			// See if there are any additional multiQC options
 			String orgLib = gr.getOrganism()+"_"+Util.WHITE_SPACE.matcher(gr.getLibraryPreparation()).replaceAll("");
-			String opts = orgLibWorkflowDocs.get(orgLib)[1].trim();
+			
+			String opts = "";
+			String[] f = orgLibWorkflowDocs.get(orgLib);
+			if (f==null) Util.pl ("WARNING: failed to fetch library info for multiQC for '"+orgLib+"'");
+			else opts = f[1].trim();
+			
 			if (opts.toLowerCase().equals("none")) opts = "";
 			
 			// Current working directory, needed for multi qc config files if present
@@ -332,15 +337,25 @@ public class GNomExAutoAnalysis {
 					//check number of jobs and number of fastq samples, HTG sometimes adds new Fastq to the old analysis folder, ugg!
 					//people also delete the Jobs dir
 					if (fastqOK && gr.getJobs()!=null) {
+						
 						int numJobs = gr.getJobs().length;
-						int numFastqSamples = gr.getNumberFastqSampleNames();			
-						if (numFastqSamples > 0 && numJobs != numFastqSamples) {
+						int numFastqSamples = gr.getNumberFastqSampleNames();
+
+						//check that the COMPLETE or MultiQC file is younger than any of the fastq or ora
+						File toCheck = null;
+						if (complete.exists()) toCheck = complete;
+						else toCheck = mqc;
+						boolean dateCheck = checkFastqDates( toCheck, gr.getFastqFiles());
+						
+						if (numFastqSamples > 0 && (numJobs != numFastqSamples || dateCheck == false)) {
+
 							if (verbose) Util.pl("\tNew Fastq found, depreciating\t"+ oldAADir);
-							//rename the AutoAnalysis folder so this gets run again on the next check
+							//rename the AutoAnalysis folder so this gets run again on the NEXT check
 							File dep = new File (oldAADir.getParentFile(), "Depreciated_"+oldAADir.getName());
 							boolean renamed = oldAADir.renameTo(dep);
 							if (renamed == false) throw new IOException("FAILED to rename "+oldAADir.getName()+" to "+dep.getName());
 						}
+						
 						else if (verbose) Util.pl("\tCOMPLETE\t"+ oldAADir);
 					}
 					else if (verbose) Util.pl("\tFastq or Jobs check failed so leave COMPLETE\t"+ oldAADir);
@@ -386,6 +401,15 @@ public class GNomExAutoAnalysis {
 		}
 	}
 
+	/**Checks if any of the files in the array are newer than the complete file.*/
+	private boolean checkFastqDates(File complete, File[] fastqFiles) {
+		long ctime = complete.lastModified();
+		for (File f: fastqFiles) {		
+			if (f.lastModified()> ctime) return false;
+		}
+		return true;
+	}
+
 	private void buildAutoAnalysisJobs() throws IOException {
 		// Any jobs?
 		if (grsToBuildAutoAnalysis.size() ==0) return;
@@ -406,96 +430,100 @@ public class GNomExAutoAnalysis {
 		TreeMap<String, Integer> molp = new TreeMap<String, Integer>();
 		
 		for (GNomExRequest r: requests) {
-
+			
 			if (test) {
 				if (r.getRequestIdCleaned().equals(experimentRequestsToProc) == false) continue;
 				else Util.pl("\nTest ExperimentRequest:\n"+r+"\n");
 			}
 			else if (verbose) Util.pl("\tSummary:\t"+r.simpleToString());
-			
-			//do they just want analysis assistance and the Fastq is available
-//delete '&& r.getAnalysisNotes().equals("NA")==false' after db has settled
-			if (r.isAutoAnalyze() == false && r.isRequestBioinfoAssistance() == true && r.checkFastq() == true && r.getAnalysisNotes().equals("NA")==false) {
-				grsRequestingAnalysisAssistance.add(r);
-				if (verbose) Util.pl("\t"+ r.getErrorMessages());
+
+			//do they want any help? the DB query should prevent any of this type of request, so this should be redundant
+			if (r.isAutoAnalyze() == false && r.isRequestBioinfoAssistance() == false) {
+				if (verbose) Util.pl("\tNo help or analysis requested");
+				grsSkipped.add(r);
 				continue;
 			}
-
-			//check for the presence of an AutoAnalysis folder and a Fastq folder
+			
 			//find the appropriate year for the request
 			calendar.setTime(dateFormat.parse(r.getCreationDate()));
 			String year = Integer.toString(calendar.get(Calendar.YEAR));
 			File repoYearSubDir = experimentalSubDirs.get(year);
+			
+			//look for the actual request directory
 			if (repoYearSubDir == null) throw new IOException ("Failed to find the year "+year+" sub directory in "+experimentalSubDirs +" for "+r.getRequestIdCleaned());
 			File requestDirOnRepo = new File (repoYearSubDir, r.getRequestIdCleaned());
 			if (requestDirOnRepo.exists() == false) {
 				Util.pl("\tERROR: failed to find the Request directory "+requestDirOnRepo+" skipping!");
 				r.setErrorMessages("Failed to find the request directory in the repo : "+ requestDirOnRepo);
 				grsSkipped.add(r);
+				continue;
 			}
-			else {
-				r.setRequestDirectory(requestDirOnRepo);
-				
-				//check for AutoAnalysis
-				if (r.checkForAutoAnalysis()) {
-					if (verbose) Util.pl("\tFound exiting AutoAnalysis dir");
-						
-					grsWithAutoAnalysis.add(r);
-					//do they also want analysis assistance?
-//delete '&& r.getAnalysisNotes().equals("NA")==false' after db has settled
-					if (r.isRequestBioinfoAssistance() && r.getAnalysisNotes().equals("NA")==false) grsRequestingAnalysisAssistance.add(r);
-					continue;
-				}
-				//check fastq if AutoAnalysis not found
-				if (r.checkFastq() == false) {
-					if (verbose) Util.pl("\tFailed to find Fastq ready for AutoAnalysis in the Request directory "+requestDirOnRepo+" skipping! No md5? Too new?");
-					r.setErrorMessages("Failed to find Fastq ready for AutoAnalysis in the repo : "+ requestDirOnRepo);
-					grsSkipped.add(r);
-					continue;
-				}
+			r.setRequestDirectory(requestDirOnRepo);
 
-				//run a bunch of other checks to see if an AutoAnalysis could be assembled
-				else {
-					//is this a supported organism_libraryPrep?
-					String orgLib = r.getOrganism()+"_"+Util.WHITE_SPACE.matcher(r.getLibraryPreparation()).replaceAll("");
-					if (orgLibWorkflowDocs.containsKey(orgLib)) {
-						String[] pathsMultiQCOptions = orgLibWorkflowDocs.get(orgLib);
-						//check fastq for dnaAlignQC?
-						if (pathsMultiQCOptions[0].contains(dnaAlignQCWFName)) {
-							if (r.checkR1R2FastqsPerSample()==false) {
-								r.setErrorMessages("For dnaAlignQC workflows, only fastq datasets with _R1_s and _R2_s are supported, UMIs need custom analysis. Check all samples for just _R1_s and _R2_s.");
-								grsSkipped.add(r);
-								//also add to the AA in case they would like a custom manual analysis
-								grsRequestingAnalysisAssistance.add(r);
-								if (verbose) Util.pl("\t"+ r.getErrorMessages());
-								continue;
-							}
-						}
-						if (verbose) Util.pl("\tReady for AutoAnalysis");
-						r.setWorkflowPaths(pathsMultiQCOptions[0]);
-						grsToBuildAutoAnalysis.add(r);
+			//is fastq or ora ready, otherwise skip
+			if (r.checkFastq() == false) {
+				if (verbose) Util.pl("\tFailed to find Fastq ready skipping! No md5? Too new?");
+				r.setErrorMessages("Failed to find Fastq ready.");
+				grsSkipped.add(r);				
+				continue;
+			}
+
+			//do they want analysis assistance and provided some notes?
+			if (r.isRequestBioinfoAssistance() == true && r.getAnalysisNotes().equals("NA")==false) {
+				grsRequestingAnalysisAssistance.add(r);
+				if (verbose) Util.pl("\tAdding to Requesting Analysis Assistance.");
+			}
+
+			//do they want Auto Analysis?
+			if (r.isAutoAnalyze() == true) {
+					//check for an existing AutoAnalysis
+					if (r.checkForAutoAnalysis()) {
+						if (verbose) Util.pl("\tFound exiting AutoAnalysis dir");
+						grsWithAutoAnalysis.add(r);
 					}
+
+					//run a bunch of other checks to see if an AutoAnalysis could be assembled
 					else {
-						//add to missing org lib prep tracker.
-						Integer count = molp.get(orgLib);
-						if (count == null) molp.put(orgLib, 1);
-						else molp.put(orgLib, count+1);
-						r.setErrorMessages("Library Protocol not supported at this time, skipping AutoAnalysis ");
-						grsSkipped.add(r);
-						//also add to the AA in case they would like a custom manual analysis, fastq is ready at this point
-						grsRequestingAnalysisAssistance.add(r);
-						if (verbose) Util.pl("\t"+ r.getErrorMessages());
+						//is this a supported organism_libraryPrep?
+						String orgLib = r.getOrganism()+"_"+Util.WHITE_SPACE.matcher(r.getLibraryPreparation()).replaceAll("");
+						if (orgLibWorkflowDocs.containsKey(orgLib)) {
+							String[] pathsMultiQCOptions = orgLibWorkflowDocs.get(orgLib);
+							
+							//check fastq/ ora for dnaAlignQC?
+							if (pathsMultiQCOptions[0].contains(dnaAlignQCWFName)) {
+								if (r.checkR1R2FastqsPerSample()==false) {
+									r.setErrorMessages("For dnaAlignQC workflows, only fastq datasets with _R1_s and _R2_s are supported, UMIs need custom analysis. Check all samples for just _R1_s and _R2_s.");
+									grsSkipped.add(r);
+									//also add to the assistance in case they would like a custom manual analysis
+									grsRequestingAnalysisAssistance.add(r);
+									if (verbose) Util.pl("\t"+ r.getErrorMessages());
+									continue;
+								}
+							}
+							if (verbose) Util.pl("\tReady for AutoAnalysis");
+							r.setWorkflowPaths(pathsMultiQCOptions[0]);
+							grsToBuildAutoAnalysis.add(r);
+						}
+						else {
+							//add to missing org lib prep tracker.
+							Integer count = molp.get(orgLib);
+							if (count == null) molp.put(orgLib, 1);
+							else molp.put(orgLib, count+1);
+							r.setErrorMessages("Library Protocol not supported at this time, skipping AutoAnalysis ");
+							grsSkipped.add(r);
+							//also add to the AA in case they would like a custom manual analysis, fastq is ready at this point
+							grsRequestingAnalysisAssistance.add(r);
+							if (verbose) Util.pl("\t"+ r.getErrorMessages());
+						}
 					}
 				}
-			}
 		}
 		//check if new missingOrgLibPreps
 		checkEmailMissingOrgLibPreps(molp);
-		
+
 		//stats
 		Util.pl("\t"+grsToBuildAutoAnalysis.size()+ "\tAutoAnalysis to run");
-		Util.pl("\t"+grsWithAutoAnalysis.size()+ "\tWith an existing AutoAnalysis");
-		Util.pl("\t"+grsSkipped.size()+ "\tSkipped");
+		for (GNomExRequest gr: grsToBuildAutoAnalysis)Util.pl("\t\t"+gr.simpleToString());
 		Util.pl("\t"+grsRequestingAnalysisAssistance.size()+ "\tWith custom help requests");
 	}
 
@@ -616,12 +644,13 @@ public class GNomExAutoAnalysis {
 				errors = true;
 			}
 			else {
+				if (verbose) Util.pl("\t"+line);
 				String[] libPreps = Util.SEMI_COLON_SPACE.split(fields[1]);
 				for (String lp: libPreps) {
 					String key = fields[0].trim()+"_"+Util.WHITE_SPACE.matcher(lp).replaceAll("");
 					orgLibWorkflowDocs.put(key, new String[] {fields[2], fields[3]});
+					if (verbose) Util.pl("\t\t'"+ key +"' -> "+fields[2]+" and "+fields[3]);
 				}
-				if (verbose) Util.pl("\t"+line);
 			}
 		}
 		in.close();
@@ -747,7 +776,7 @@ public class GNomExAutoAnalysis {
 	public static void printDocs(){
 		Util.pl("\n" +
 				"**************************************************************************************\n" +
-				"**                           GNomEx Auto Analysis: Jan 2025                         **\n" +
+				"**                           GNomEx Auto Analysis: Nov 2025                         **\n" +
 				"**************************************************************************************\n" +
 				"GAA orchestrates setting up auto analysis jobs from GNomEx Experiment Fastq. It looks\n"+
 				"for ERs in the GNomEx db where the user has selected a genome build to align to,\n"+

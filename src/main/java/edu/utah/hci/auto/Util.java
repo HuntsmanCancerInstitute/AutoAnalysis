@@ -604,4 +604,19 @@ public class Util {
 		}
 		else return null;
 	}
+	/**Merges all files in File[][] to a File[].*/
+	public static File[] collapseFileArray(File[][] f) {
+		ArrayList<File> al = new ArrayList<File>();
+		for (int i=0; i< f.length; i++){
+			if (f[i] != null){
+				for (int j=0; j< f[i].length; j++){
+					al.add(f[i][j]);
+				}
+			}
+		}
+		File[] files = new File[al.size()];
+		al.toArray(files);
+		return files;
+	}
+
 }
